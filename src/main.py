@@ -15,7 +15,7 @@ conn = r.connect("localhost", 28015,db="DB_NAME").repl()
 
 
 routes = [
-	["TABLE_NAME","INDEX"] # create more as necessary
+	["TABLE_NAME","TABLE_INDEX"] # create more as necessary
 ]
 
 # utilities
@@ -26,61 +26,71 @@ def dictify(d,last_element):
 		return {d[0]: dictify(d[1:],last_element)}
 
 # routing
-for route in routes:
-	@app.route("/{}/<path:path>".format(route[0]), methods=["GET","POST","DELETE","PUT","PATCH"])
-	def new_route(path):
+@app.route("/<path:path>", methods=["GET","POST","DELETE","PUT","PATCH"])
+def new_route(path):
 
-		if request.args.get("key") != key:
-			return "Access Denied"
+	if request.args.get("key") != key:
+		return "Access Denied", 401
 
-		if path.endswith("/"):
-			path = path[:-1]
-		path = path.split("/")
+	if path.endswith("/"):
+		path = path[:-1]
+	path = path.split("/")
 
-		lastElement = None
-		index = path[0]
+	if len(path) != 1:
+		table_name, index = path[0], path[1]
+		del path[0]
+	else:
+		return json.dumps(list(r.table(path[0]).run()))
 
-		for arg in path:
-			if lastElement:
-				try:
-					thisElement = lastElement.get_field(arg)
-					thisElement.run()
-					lastElement = thisElement
-				except:
-					if request.method == "GET":
-						return "null"
-			else:
-				lastElement = r.table(route[0]).get(arg)
+	last_element = None
 
-		if request.method == "GET":
+	for route in routes:
+		if route[0] == table_name:
+			break
+	else:
+		return "Route Not Found", 404
+
+	try:
+		r.table(table_name).run()
+	except:
+		r.table_create(table_name).run()
+
+	for arg in path:
+		if last_element:
 			try:
-				lastElement = lastElement.run()
-				return json.dumps(lastElement)
-			except Exception as e:
-				e = str(e)
-				return json.dumps({'error':e})
+				thisElement = last_element.get_field(arg)
+				thisElement.run()
+				last_element = thisElement
+			except:
+				if request.method == "GET":
+					return "null"
+		else:
+			last_element = r.table(table_name).get(arg)
 
-		elif request.method == "POST" or request.method == "PATCH": #TODO: PUT for data replacement
-			data = json.loads(request.data)
-			del path[0]
-			if len(path) != 0:
-				save_data = dictify(path,data)
-			else:
-				save_data = data
-			save_data[route[1]] = index
-			if r.table(route[0]).get(index).run() == None:
-				return json.dumps(r.table(route[0]).insert(save_data).run())
-			else:
-				return json.dumps(r.table(route[0]).get(index).update(save_data).run())
+	if request.method == "GET":
+		try:
+			last_element = last_element.run()
+			return json.dumps(last_element)
+		except Exception as e:
+			e = str(e)
+			return json.dumps({'error':e}), 400
 
-		elif request.method == "DELETE":
-			del path[0]
-			return json.dumps(r.table(route[0]).get(index).replace(r.row.without(dictify(path,True))).run())
+	elif request.method == "POST" or request.method == "PATCH": #TODO: PUT for data replacement
+		del path[0]
+		data = json.loads(request.data)
+		if len(path) != 0:
+			save_data = dictify(path,data)
+		else:
+			save_data = data
+		save_data[route[1]] = index
+		if r.table(table_name).get(index).run() == None:
+			return json.dumps(r.table(table_name).insert(save_data).run())
+		else:
+			return json.dumps(r.table(table_name).get(index).update(save_data).run())
 
-	@app.route("/{}/".format(route[0]), methods=["GET"])
-	def all_data():
-
-		if request.args.get("key") != key:
-			return "Access Denied"
-
-		return json.dumps(list(r.table(route[0]).run()))
+	elif request.method == "DELETE":
+		del path[0]
+		if len(path) == 0:
+			return json.dumps(r.table(table_name).get(index).delete().run())
+		else:
+			return json.dumps(r.table(table_name).get(index).replace(r.row.without(dictify(path,True))).run())
